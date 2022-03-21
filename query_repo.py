@@ -1,7 +1,6 @@
 from os import environ
 
 import requests
-import numpy as np
 
 MAX_QUERY_ATTEMPTS = 10
 AFTER_PREFIX = 'after: {cursor}'
@@ -41,7 +40,7 @@ def export_csv(repos: list) -> None:
     """
     filename = 'output/repositories.csv'
     with open(filename, 'w') as f:
-        f.write('nameWithOwner,url,createdAt,stargazers,releases,cbo,dit,lcom\n')
+        f.write('nameWithOwner,url,createdAt,stargazers,releases,alreadyRead\n')
         for repo in repos:
             f.write('{},{},{},{},{},{}\n'.format(
                 repo['nameWithOwner'],
@@ -49,9 +48,7 @@ def export_csv(repos: list) -> None:
                 repo['createdAt'],
                 repo['stargazers']['totalCount'],
                 repo['releases']['totalCount'],
-                np.nan,
-                np.nan,
-                np.nan
+                False
             ))
     return filename
 
