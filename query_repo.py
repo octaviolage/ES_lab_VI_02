@@ -1,10 +1,10 @@
 from os import environ
 
 import requests
-import numpy as np
 
 MAX_QUERY_ATTEMPTS = 10
 AFTER_PREFIX = 'after: {cursor}'
+OUTPUT = 'data/repositories.csv'
 
 # We choose the first 20 repositories to avoid 502 errors from GitHub GraphQL API.
 QUERY = """
@@ -39,9 +39,8 @@ def export_csv(repos: list) -> None:
     """
     This function exports the list of repositories to a CSV file.
     """
-    filename = 'output/repositories.csv'
-    with open(filename, 'w') as f:
-        f.write('nameWithOwner,url,createdAt,stargazers,releases,cbo,dit,lcom\n')
+    with open(OUTPUT, 'w') as f:
+        f.write('nameWithOwner,url,createdAt,stargazers,releases,alreadyRead\n')
         for repo in repos:
             f.write('{},{},{},{},{},{}\n'.format(
                 repo['nameWithOwner'],
@@ -49,11 +48,9 @@ def export_csv(repos: list) -> None:
                 repo['createdAt'],
                 repo['stargazers']['totalCount'],
                 repo['releases']['totalCount'],
-                np.nan,
-                np.nan,
-                np.nan
+                False
             ))
-    return filename
+    return OUTPUT
 
 
 def query_runner(query: str, token: str, attemp=1) -> dict:
