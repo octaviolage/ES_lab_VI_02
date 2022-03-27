@@ -1,6 +1,6 @@
 import os, shutil, subprocess
-import numpy as np
 from datetime import datetime as dt
+import multiprocessing as mul
 
 import pandas as pd
 from git import Repo
@@ -8,26 +8,17 @@ from git import Repo
 from query_repo import generate_repo_csv
 
 NUM_REPO = 1000
+
 REPOS_FOLDER = 'data/repos/'
 METRICS_FOLDER = 'data/ck_metrics/'
-CK_RUNNER = 'data/ckRunner.jar'
-INPUT = 'data/repositories.csv'
+OUTPUT_FOLDER = 'output/'
+
+CK_RUNNER = 'data/Runner.jar'
+INPUT_FILE = 'data/repositories.csv'
 OUTPUT = 'output/analysis.csv'
+
 COLUMNS = ['nameWithOwner', 'url', 'createdAt', 'stargazers',
             'releases', 'loc', 'cbo', 'dit', 'lcom']
-
-
-def remove_cache_files():
-    if os.path.exists(REPOS_FOLDER):
-        for child in os.listdir(REPOS_FOLDER):
-            shutil.rmtree(REPOS_FOLDER + child, ignore_errors=True)
-    else:
-        os.mkdir(REPOS_FOLDER)
-    if os.path.exists(METRICS_FOLDER):
-        for child in os.listdir(METRICS_FOLDER):
-            os.remove(METRICS_FOLDER + child)
-    else:
-        os.mkdir(METRICS_FOLDER)
 
 
 def log_print(message):
@@ -35,54 +26,105 @@ def log_print(message):
     print(f'{now} - {message}')
 
 
+def already_processed(nameWithOwner: str) -> bool:
+    if os.path.exists(OUTPUT):
+        df = pd.read_csv(OUTPUT)
+        return nameWithOwner in df['nameWithOwner'].values
+    return False
+
+
+def delete_cached_repos(repo_name: str):
+    if os.path.exists(REPOS_FOLDER + repo_name):
+        shutil.rmtree(REPOS_FOLDER + repo_name)
+    if os.path.exists(METRICS_FOLDER + repo_name + 'class.csv'):
+        os.remove(METRICS_FOLDER + repo_name + 'class.csv')
+    if os.path.exists(METRICS_FOLDER + repo_name + 'method.csv'):
+        os.remove(METRICS_FOLDER + repo_name + 'method.csv')
+
+
+def run_ck_metrics(nameWithOwner: str, url: str, created_at: str, stargazers: int, releases: int) -> None:
+    try:
+        repo_name = nameWithOwner.replace('/', '@')
+        delete_cached_repos(repo_name)
+
+        # Assert that the repository isn't already in the output
+        if not os.path.exists(f'{OUTPUT_FOLDER}{repo_name}.csv') and not already_processed(nameWithOwner):
+            repo_path = REPOS_FOLDER + repo_name
+            ck_metrics_path = METRICS_FOLDER + repo_name
+
+            log_print(f'Cloning {nameWithOwner}')
+            Repo.clone_from(url, repo_path, depth=1, filter='blob:none')
+
+            log_print(f'Running CK metrics on {repo_name}')
+            subprocess.call(["java", "-jar", CK_RUNNER, repo_path, "true", "0", "False", ck_metrics_path])
+
+            metrics = pd.read_csv(ck_metrics_path + 'class.csv')
+            loc = metrics['loc'].sum()
+            cbo = metrics['cbo'].median()
+            dit = metrics['dit'].median()
+            lcom = metrics['lcom'].median()
+
+            df = pd.DataFrame([[nameWithOwner, url, created_at, stargazers,
+                releases, loc, cbo, dit, lcom]], columns=COLUMNS)
+            df.to_csv(OUTPUT_FOLDER + repo_name + '.csv', index=False)
+
+            shutil.rmtree(repo_path)
+            os.remove(ck_metrics_path + 'class.csv')
+            os.remove(ck_metrics_path + 'method.csv')
+
+            return df
+    
+    except Exception as e:
+        log_print(f'Error on {nameWithOwner}')
+        log_print('Look at the error.log for more information.')
+        with open('error.log', 'a') as f:
+            f.write(f'{dt.now().strftime("%Y-%m-%d %H:%M:%S")} - {nameWithOwner} - {e}\n')
+            f.write(f'{e}\n')
+            f.write('-'*50 + '\n')
+        delete_cached_repos(repo_name)
+
+
 if __name__ == '__main__':
     rp_list = pd.DataFrame()
-    if os.path.exists(INPUT):
+    # Delete old logs
+    with open('error.log', 'w') as f: f.write('')
+
+    # Verify if the input file exists. If not, generate it.
+    if os.path.exists(INPUT_FILE):
         log_print('Reading repositories')
-        rp_list = pd.read_csv(INPUT)
+        rp_list = pd.read_csv(INPUT_FILE)
     else:
         log_print('Generating repositories.csv')
         generate_repo_csv(NUM_REPO)
 
+    # Verify if the input file is valid. If not, generate it.
     if len(rp_list) != NUM_REPO:
         log_print('Generating new repositories.csv')
         generate_repo_csv(NUM_REPO)
 
-    rp_list = pd.read_csv(INPUT)
-    rp_unread = rp_list[rp_list['alreadyRead'] == False]
+    # Declare the number of threads to use
+    # pool = mul.Pool(int(os.cpu_count()*0.75))
+    pool = mul.Pool(int(os.cpu_count()))
+
+    # Get the input file and filter out the already read repositories
+    rp_list = pd.read_csv(INPUT_FILE)
+
+    # Run the CK metrics for each repository
+    rows = list(rp_list.itertuples(name=None, index=False))
+    results = pool.starmap(run_ck_metrics, rows)
+    results = list(filter(lambda x: x is not None, results))
+
+    # Build the output file for each repository analyzed in outut folder and remove
+    output = pd.concat(results) if len(results) > 0 else pd.DataFrame(columns=COLUMNS)
     if os.path.exists(OUTPUT):
-        output = pd.read_csv(OUTPUT)
-        if len(output) + len(rp_unread) != NUM_REPO:
-            rp_list['alreadyRead'] = False
-            rp_unread = rp_list
-            output = pd.DataFrame(columns=COLUMNS)
-    else:
-        output = pd.DataFrame(columns=COLUMNS)
+        output = pd.concat([output, pd.read_csv(OUTPUT)])
+    for repo in os.listdir(OUTPUT_FOLDER):
+        output = pd.concat([output, pd.read_csv(OUTPUT_FOLDER + repo)])
+        # os.remove(OUTPUT_FOLDER + repo)
 
-    for row in rp_unread.itertuples():
-        remove_cache_files()
-        repo_name = row.nameWithOwner.split('/')[1]
-        repo_path = REPOS_FOLDER + repo_name
-        ck_metrics_path = METRICS_FOLDER + repo_name
-        log_print(f'Cloning {repo_name} / {repo_path}')
-        Repo.clone_from(row.url, repo_path, filter='blob:none')
-
-        log_print(f'Running CK metrics on {repo_name}')
-        subprocess.call(["java", "-jar", CK_RUNNER, repo_path, "true", "0", "False", ck_metrics_path])
-
-        metrics = pd.read_csv(ck_metrics_path + 'class.csv')
-        loc = metrics['loc'].sum()
-        cbo = metrics['cbo'].median()
-        dit = metrics['dit'].median()
-        lcom = metrics['lcom'].median()
-
-        output = pd.concat([output, pd.DataFrame([[row.nameWithOwner, row.url, row.createdAt, row.stargazers,
-            row.releases, loc, cbo, dit, lcom]], columns=COLUMNS)])
-        output.to_csv(OUTPUT, index=False)
-        rp_list.loc[rp_list['nameWithOwner'] == row.nameWithOwner, 'alreadyRead'] = True
-        rp_list.to_csv(INPUT, index=False)
-        # input('Press enter to continue')
-
-    remove_cache_files()
+    # Assert that the output file has not duplicates
+    output = output.drop_duplicates()
+    # Export the output file
+    output.to_csv(OUTPUT, index=False)
 
     log_print('Done')

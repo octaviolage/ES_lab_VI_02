@@ -3,13 +3,13 @@ from os import environ
 import requests
 
 MAX_QUERY_ATTEMPTS = 10
-AFTER_PREFIX = 'after: {cursor}'
+AFTER_PREFIX = ', after: {cursor}'
 OUTPUT = 'data/repositories.csv'
 
 # We choose the first 20 repositories to avoid 502 errors from GitHub GraphQL API.
 QUERY = """
     {
-      search(query: "language:java,stars:>100", type: REPOSITORY, first: 20, {after}) {
+      search(query: "language:java,stars:>100", type: REPOSITORY, first: 20 {after}) {
         pageInfo {
           hasNextPage
           endCursor
@@ -40,15 +40,14 @@ def export_csv(repos: list) -> None:
     This function exports the list of repositories to a CSV file.
     """
     with open(OUTPUT, 'w') as f:
-        f.write('nameWithOwner,url,createdAt,stargazers,releases,alreadyRead\n')
+        f.write('nameWithOwner,url,createdAt,stargazers,releases\n')
         for repo in repos:
-            f.write('{},{},{},{},{},{}\n'.format(
+            f.write('{},{},{},{},{}\n'.format(
                 repo['nameWithOwner'],
                 repo['url'],
                 repo['createdAt'],
                 repo['stargazers']['totalCount'],
-                repo['releases']['totalCount'],
-                False
+                repo['releases']['totalCount']
             ))
     return OUTPUT
 
@@ -94,7 +93,7 @@ def generate_repo_csv(results: int, token: str=None) -> str:
             raise Exception(
                 "You need to set the GITHUB_TOKEN environment variable or pass your token as an argument")
 
-    after = AFTER_PREFIX.format(cursor='null') # Pagination
+    after = '' # Pagination
     repositories = [] # List of repositories
     # The process is repeated until there are amount of results wanted
     while (len(repositories) < results):
@@ -103,9 +102,6 @@ def generate_repo_csv(results: int, token: str=None) -> str:
         if response['search']['pageInfo']['hasNextPage']:
             cursor = response['search']['pageInfo']['endCursor']
             after = AFTER_PREFIX.format(cursor=f'"{cursor}"')
-        else:
-            break
-    repositories = repositories[:results]
     return export_csv(repositories)
 
 
