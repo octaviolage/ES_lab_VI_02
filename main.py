@@ -5,7 +5,7 @@ import multiprocessing as mul
 import pandas as pd
 from git import Repo
 
-from query_repo import generate_repo_csv
+from data.query_repo import generate_repo_csv
 
 NUM_REPO = 1000
 
@@ -34,12 +34,15 @@ def already_processed(nameWithOwner: str) -> bool:
 
 
 def delete_cached_repos(repo_name: str):
-    if os.path.exists(REPOS_FOLDER + repo_name):
-        shutil.rmtree(REPOS_FOLDER + repo_name)
-    if os.path.exists(METRICS_FOLDER + repo_name + 'class.csv'):
-        os.remove(METRICS_FOLDER + repo_name + 'class.csv')
-    if os.path.exists(METRICS_FOLDER + repo_name + 'method.csv'):
-        os.remove(METRICS_FOLDER + repo_name + 'method.csv')
+    try:
+        if os.path.exists(REPOS_FOLDER + repo_name):
+            shutil.rmtree(REPOS_FOLDER + repo_name)
+        if os.path.exists(METRICS_FOLDER + repo_name + 'class.csv'):
+            os.remove(METRICS_FOLDER + repo_name + 'class.csv')
+        if os.path.exists(METRICS_FOLDER + repo_name + 'method.csv'):
+            os.remove(METRICS_FOLDER + repo_name + 'method.csv')
+    except Exception as e:
+        log_print(f'Error on exclude {repo_name} =/ ')
 
 
 def run_ck_metrics(nameWithOwner: str, url: str, created_at: str, stargazers: int, releases: int) -> None:
@@ -75,36 +78,36 @@ def run_ck_metrics(nameWithOwner: str, url: str, created_at: str, stargazers: in
             return df
     
     except Exception as e:
-        log_print(f'Error on {nameWithOwner}')
-        log_print('Look at the error.log for more information.')
-        with open('error.log', 'a') as f:
-            f.write(f'{dt.now().strftime("%Y-%m-%d %H:%M:%S")} - {nameWithOwner} - {e}\n')
-            f.write(f'{e}\n')
-            f.write('-'*50 + '\n')
+        log_print(f'Error on {nameWithOwner}: {e}')
         delete_cached_repos(repo_name)
 
 
 if __name__ == '__main__':
     rp_list = pd.DataFrame()
-    # Delete old logs
-    with open('error.log', 'w') as f: f.write('')
+
+    # Create folders if they don't exist
+    if not os.path.exists(OUTPUT): os.makedirs(OUTPUT_FOLDER)
+    if not os.path.exists(REPOS_FOLDER): os.makedirs(REPOS_FOLDER)
+    if not os.path.exists(METRICS_FOLDER): os.makedirs(METRICS_FOLDER)
 
     # Verify if the input file exists. If not, generate it.
     if os.path.exists(INPUT_FILE):
         log_print('Reading repositories')
-        rp_list = pd.read_csv(INPUT_FILE)
     else:
         log_print('Generating repositories.csv')
         generate_repo_csv(NUM_REPO)
 
+    # Read the input file
+    rp_list = pd.read_csv(INPUT_FILE)
+
     # Verify if the input file is valid. If not, generate it.
-    if len(rp_list) != NUM_REPO:
+    if len(rp_list) <= NUM_REPO:
         log_print('Generating new repositories.csv')
         generate_repo_csv(NUM_REPO)
 
+    rp_list = rp_list.sort_values(by='stargazers', ascending=False)[:int(NUM_REPO*1.25)]
     # Declare the number of threads to use
-    # pool = mul.Pool(int(os.cpu_count()*0.75))
-    pool = mul.Pool(int(os.cpu_count()))
+    pool = mul.Pool(int(os.cpu_count())*3)
 
     # Get the input file and filter out the already read repositories
     rp_list = pd.read_csv(INPUT_FILE)
@@ -120,10 +123,11 @@ if __name__ == '__main__':
         output = pd.concat([output, pd.read_csv(OUTPUT)])
     for repo in os.listdir(OUTPUT_FOLDER):
         output = pd.concat([output, pd.read_csv(OUTPUT_FOLDER + repo)])
-        # os.remove(OUTPUT_FOLDER + repo)
+        os.remove(OUTPUT_FOLDER + repo)
 
     # Assert that the output file has not duplicates
     output = output.drop_duplicates()
+    output = output.sort_values(by='stargazers', ascending=False)
     # Export the output file
     output.to_csv(OUTPUT, index=False)
 
